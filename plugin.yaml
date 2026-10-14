@@ -1,0 +1,15 @@
+name: hermes-fleet-connector
+version: 0.1.4
+description: Owner-authorized Telegram pairing for Hermes Fleet DEV 12 through a separate private connector service.
+author: Hermes Fleet
+kind: standalone
+requires_hermes: ">=0.21.6,<0.21.7"
+python_dependencies:
+  - "fastapi>=0.133.1,<0.134"
+  - "uvicorn>=0.41.0,<0.42"
+  - "httpx>=0.28.1,<0.29"
+  - "websockets>=15.0.1,<16"
+provides_tools: []
+provides_hooks: []
+provides_middleware: []
+requires_env: []
