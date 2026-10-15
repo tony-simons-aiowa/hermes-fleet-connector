@@ -5,7 +5,7 @@ import json
 import socket
 import time
 from pathlib import Path
-from .settings import root, load, private_json
+from .settings import root, load, private_json, STOCK_VERSION_SHAS
 
 def owner_event(update, owners: list[int]) -> bool:
     m = getattr(update, "message", None)
@@ -45,8 +45,14 @@ def socket_path(home: Path) -> Path:
     return Path(f"/tmp/hfc-{os.getuid()}-{hashlib.sha256(str(home.resolve()).encode()).hexdigest()[:16]}") / "control.sock"
 
 def register(ctx) -> None:
+    from hermes_cli.version_info import get_version_info
     from hermes_constants import get_hermes_home
     from hermes_cli.plugin_isolation import isolation_mode
+    running = get_version_info()
+    expected_sha = STOCK_VERSION_SHAS.get(running.base_version)
+    if not expected_sha or running.commit != expected_sha or running.dirty:
+        versions = ", ".join(f"v{version}" for version in STOCK_VERSION_SHAS)
+        raise RuntimeError(f"Requires clean official Hermes {versions} source; no core overlay is supported")
     if isolation_mode() == "host":
         raise RuntimeError("Fleet requires native Telegram handlers; host isolation is preserved")
     expected_home = Path(get_hermes_home()).resolve()

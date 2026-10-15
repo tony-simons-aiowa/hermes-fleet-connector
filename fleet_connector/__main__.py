@@ -12,7 +12,8 @@ import sys
 import threading
 import time
 from pathlib import Path
-from .settings import NAME, STOCK_SHA, AUDITED_GATEWAY_SHA, load, root, normalise_origin, private_json
+from .settings import (NAME, SUPPORTED_STOCK_SHAS, STOCK_VERSION_SHAS,
+                       AUDITED_GATEWAY_SHA, load, root, normalise_origin, private_json)
 from . import VERSION
 from .bridge import control
 
@@ -22,8 +23,9 @@ def check_stock(path: Path):
                          capture_output=True, text=True).stdout.strip()
     dirty = subprocess.run(["git", "-C", str(source), "status", "--porcelain", "--untracked-files=no"],
                            check=True, capture_output=True, text=True).stdout
-    if sha != STOCK_SHA or dirty:
-        raise ValueError("Requires clean official Hermes v0.21.6 source; no core overlay is supported")
+    if sha not in SUPPORTED_STOCK_SHAS or dirty:
+        versions = ", ".join(f"v{version}" for version in STOCK_VERSION_SHAS)
+        raise ValueError(f"Requires clean official Hermes {versions} source; no core overlay is supported")
     return source
 
 def check_policy(home: Path, source: Path):
@@ -92,7 +94,7 @@ def check_existing_backend(path: Path):
     source = path.resolve(strict=True)
     sha = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
     dirty = subprocess.check_output(["git", "-C", str(source), "status", "--porcelain", "--untracked-files=no"], text=True)
-    if sha not in {STOCK_SHA, AUDITED_GATEWAY_SHA} or dirty:
+    if sha not in SUPPORTED_STOCK_SHAS | {AUDITED_GATEWAY_SHA} or dirty:
         raise ValueError("Existing backend source has not been audited")
     return source
 

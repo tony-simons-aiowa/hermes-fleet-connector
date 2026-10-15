@@ -9,7 +9,13 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 NAME = "hermes-fleet-connector"
-STOCK_SHA = "818c13be1dc4fd28987e1e881a9408224afd4535"
+STOCK_VERSION_SHAS = {
+    "0.21.6": "818c13be1dc4fd28987e1e881a9408224afd4535",
+    "0.22.1": "297552a9d646119871391d202509822cd86330df",
+}
+# Keep the original name for callers that consume the v0.21.6 pin directly.
+STOCK_SHA = STOCK_VERSION_SHAS["0.21.6"]
+SUPPORTED_STOCK_SHAS = frozenset(STOCK_VERSION_SHAS.values())
 AUDITED_GATEWAY_SHA = "ecd22716c35c6993797808cfd9c05feb8fa0193f"
 
 def root(home: Path) -> Path:

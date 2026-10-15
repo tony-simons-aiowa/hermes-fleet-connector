@@ -1,6 +1,6 @@
 """Real TLS sockets and real stock Hermes process, with disposable profile and CA.
 
-Run with HERMES_STOCK_ROOT pointing at the clean v0.21.6 checkout. This does not
+Run with HERMES_STOCK_ROOT pointing at a clean supported Hermes checkout. This does not
 prove private Tailscale transport, production trust, Telegram delivery or a phone scan.
 """
 import asyncio
