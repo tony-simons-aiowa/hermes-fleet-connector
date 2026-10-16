@@ -41,26 +41,8 @@ def test_expired_telegram_binding_refuses(tmp_path,monkeypatch):
     with pytest.raises(ValueError):configure(tmp_path,a)
     assert not (root(tmp_path)/"settings.json").exists()
 
-def test_nonstock_source_refuses(tmp_path):
-    import subprocess
-    subprocess.run(["git","init",str(tmp_path)],check=True,capture_output=True)
-    (tmp_path/"fixture").write_text("unrelated")
-    subprocess.run(["git","-C",str(tmp_path),"add","."],check=True,capture_output=True)
-    subprocess.run(["git","-C",str(tmp_path),"-c","user.name=Fixture","-c","user.email=fixture@example.test","commit","-m","fixture"],check=True,capture_output=True)
-    with pytest.raises(ValueError):check_stock(tmp_path)
-    with pytest.raises(ValueError):check_existing_backend(tmp_path)
-    assert (tmp_path/"fixture").read_text()=="unrelated"
-
-def test_dirty_supported_source_refuses(tmp_path,monkeypatch):
-    import subprocess
-    from types import SimpleNamespace
-    from fleet_connector.settings import STOCK_VERSION_SHAS
-    supported_sha=STOCK_VERSION_SHAS["0.22.1"]
-    def run(argv,**kwargs):
-        return SimpleNamespace(stdout=(supported_sha+"\n") if "rev-parse" in argv else " M tracked.py\n")
-    monkeypatch.setattr(subprocess,"run",run)
-    with pytest.raises(ValueError):check_stock(tmp_path)
-    def check_output(argv,**kwargs):
-        return (supported_sha+"\n") if "rev-parse" in argv else " M tracked.py\n"
-    monkeypatch.setattr(subprocess,"check_output",check_output)
-    with pytest.raises(ValueError):check_existing_backend(tmp_path)
+def test_host_without_required_capabilities_refuses(tmp_path):
+    with pytest.raises(ValueError, match="required plugin capabilities"):
+        check_stock(tmp_path)
+    with pytest.raises(ValueError, match="required plugin capabilities"):
+        check_existing_backend(tmp_path)

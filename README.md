@@ -4,9 +4,9 @@ Version 0.1.5 is an independently maintained Hermes plugin and companion service
 
 ## Compatibility
 
-- Verified against clean official Hermes v0.21.6 (`818c13be1dc4fd28987e1e881a9408224afd4535`) and v0.22.1 (`297552a9d646119871391d202509822cd86330df`) with Python 3.14. Plugin registration, setup and service startup require one of these exact source commits with no tracked changes; other versions, commits, and dirty tracked trees are refused.
-- Hermes's manifest syntax supports comma-separated AND clauses, not a disjunction, so the range admits versions from `>=0.21.6,<0.22.2`. Registration checks Hermes's reported version, commit and dirty state before adding a handler or auth provider; the exact source-commit allowlist also gates setup and service startup. Versions in between are not supported.
-- Requires effective `plugins.isolation: in_process`; the connector does not change isolation settings.
+- The manifest requires Hermes `>=0.21.6` with no upper bound. Compatibility is determined by the APIs the connector uses, not a reported version, source commit, or Git working-tree state. This permits pip and Desktop installs when their Python environment exposes the required Hermes modules; Git metadata is optional.
+- The public `PluginContext` must provide `register_platform_handler` and `register_dashboard_auth_provider`. Setup and service startup also check for `hermes_constants.get_hermes_home` and `hermes_cli.plugin_isolation.isolation_mode`; registration checks the actual context instance before adding either handler or provider. Missing APIs fail closed. The relevant public registration methods are present in the official v0.21.6, v0.22.1, and v0.22.2 sources.
+- Requires effective `plugins.isolation: in_process`; the connector does not change isolation settings. Unsupported isolation is refused during setup, startup, and plugin registration.
 - Supported desktop display paths are macOS and Linux with a logged-in local GUI session, a private browser window, a private screen, and the existing `qrencode` command. Headless/SSH-only display contexts are refused.
 - The WSL-to-Windows Edge adapter is experimental and is not part of the supported platform matrix. End-to-end WSL browser paint has not been verified. Native Windows is not supported.
 
@@ -49,10 +49,10 @@ The phone invitation is single-use, short-lived (120 seconds), and scoped to `fl
 
 ## Development tests
 
-With a clean official Hermes v0.21.6 or v0.22.1 checkout available, run:
+The focused compatibility tests use versionless, Gitless pip/Desktop-shaped fixtures. To also run loader and Telegram integration tests against an actual Hermes install, set `HERMES_STOCK_ROOT` to its source or package root:
 
 ```sh
-PYTHONPATH=/path/to/clean/hermes-agent:. HERMES_STOCK_ROOT=/path/to/clean/hermes-agent python -m pytest tests
+PYTHONPATH=/path/to/hermes-root:. HERMES_STOCK_ROOT=/path/to/hermes-root python3.14 -m pytest tests
 ```
 
-The suite uses synthetic fixtures and disposable profiles. It does not replace owner acceptance, browser paint, or device pairing.
+The suite uses synthetic fixtures and disposable profiles. It does not replace owner acceptance, browser paint, or device pairing. The live-host integration tests do not require a specific Hermes version or Git commit.

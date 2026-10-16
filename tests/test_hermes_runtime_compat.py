@@ -1,32 +1,27 @@
-"""Hermes v0.22.1 loader, doctor, and native Telegram integration checks.
+"""Hermes loader, doctor, and native Telegram integration checks.
 
-Set HERMES_STOCK_ROOT to the clean official v0.22.1 checkout and put it first on
-PYTHONPATH to run these checks against the real host APIs. No Telegram network
-or account credentials are used.
+Set HERMES_STOCK_ROOT to an official source checkout or installed package root
+to run these checks against real host APIs. No Git metadata or Telegram
+credentials are required.
 """
 import json
 import os
 import shutil
-import subprocess
 from pathlib import Path
 from types import SimpleNamespace as NS
 
 import pytest
 
-from fleet_connector.settings import NAME, STOCK_VERSION_SHAS
-
-EXPECTED_SHA = STOCK_VERSION_SHAS["0.22.1"]
+from fleet_connector.settings import NAME
 
 
-def _official_0221():
+def _hermes_host_root():
     raw = os.environ.get("HERMES_STOCK_ROOT")
     if not raw:
-        pytest.skip("Set HERMES_STOCK_ROOT to the clean official Hermes v0.22.1 checkout")
+        pytest.skip("Set HERMES_STOCK_ROOT to an official Hermes install or source root")
     source = Path(raw).resolve(strict=True)
-    head = subprocess.run(["git", "-C", str(source), "rev-parse", "HEAD"], check=True,
-                          capture_output=True, text=True).stdout.strip()
-    if head != EXPECTED_SHA:
-        pytest.skip(f"HERMES_STOCK_ROOT is {head}, not the v0.22.1 compatibility target")
+    from fleet_connector.__main__ import check_stock
+    check_stock(source)
     return source
 
 
@@ -39,8 +34,8 @@ def _install_under_home(home, plugin_dir):
     (home / "config.yaml").write_text(f"plugins:\n  enabled:\n    - {NAME}\n")
 
 
-def test_hermes_0221_manifest_loader_guard_and_doctor():
-    source = _official_0221()
+def test_hermes_manifest_loader_guard_and_doctor():
+    source = _hermes_host_root()
     from fleet_connector.__main__ import check_stock, check_existing_backend
     assert check_stock(source) == source
     assert check_existing_backend(source) == source
@@ -59,8 +54,8 @@ def test_hermes_0221_manifest_loader_guard_and_doctor():
     assert checks["capability probe"][0]
 
 
-def test_hermes_0221_real_discovery_and_private_telegram_authorization(tmp_path, monkeypatch):
-    _official_0221()
+def test_hermes_real_discovery_and_private_telegram_authorization(tmp_path, monkeypatch):
+    _hermes_host_root()
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     bundled = tmp_path / "empty-bundled"
     bundled.mkdir()
@@ -119,35 +114,26 @@ def test_hermes_0221_real_discovery_and_private_telegram_authorization(tmp_path,
             unregister_global_provider(provider.name, provider)
 
 
-@pytest.mark.parametrize("base_version,commit,dirty", [
-    ("0.22.0", "b" * 40, False),
-    ("0.22.1", EXPECTED_SHA, True),
-    ("0.22.1", "b" * 40, False),
+@pytest.mark.parametrize("missing", [
+    "register_platform_handler",
+    "register_dashboard_auth_provider",
 ])
-def test_real_loader_blocks_unsupported_or_dirty_runtime_before_registration(
-        tmp_path, monkeypatch, base_version, commit, dirty):
-    _official_0221()
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    bundled = tmp_path / "empty-bundled"
-    bundled.mkdir()
-    monkeypatch.setenv("HERMES_BUNDLED_PLUGINS", str(bundled))
-    _install_under_home(tmp_path, Path(__file__).resolve().parents[1])
+def test_plugin_context_missing_public_capability_refuses_before_registration(missing):
+    from fleet_connector.bridge import register
 
-    from hermes_cli import version_info
-    from hermes_cli.plugins import PluginManager
-    from hermes_cli.dashboard_auth.registry import list_providers
-    before = next((p for p in list_providers() if p.name == "fleet-connector-backend"), None)
-    monkeypatch.setattr(version_info, "get_version_info",
-                        lambda: NS(base_version=base_version, commit=commit, dirty=dirty))
+    registrations = []
+    context = NS(
+        register_platform_handler=lambda *args: registrations.append(("handler", args)),
+        register_dashboard_auth_provider=lambda *args: registrations.append(("auth", args)),
+    )
+    delattr(context, missing)
+    with pytest.raises(RuntimeError, match=missing):
+        register(context)
+    assert registrations == []
 
-    manager = PluginManager()
-    try:
-        manager.discover_and_load()
-        loaded = manager._plugins.get(NAME)
-        assert loaded is not None and loaded.error
-        assert "Requires clean official Hermes" in loaded.error
-        assert manager.get_platform_handler_factories("telegram") == []
-        after = next((p for p in list_providers() if p.name == "fleet-connector-backend"), None)
-        assert after is before
-    finally:
-        manager.unload()
+
+def test_missing_private_telegram_auth_method_fails_closed(caplog):
+    from fleet_connector.bridge import _private_callback_authorized
+
+    assert not _private_callback_authorized(NS(), "123", "123")
+    assert "lacks its callback authorization method" in caplog.text

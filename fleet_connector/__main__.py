@@ -12,20 +12,22 @@ import sys
 import threading
 import time
 from pathlib import Path
-from .settings import (NAME, SUPPORTED_STOCK_SHAS, STOCK_VERSION_SHAS,
-                       AUDITED_GATEWAY_SHA, load, root, normalise_origin, private_json)
+from .settings import NAME, load, root, normalise_origin, private_json
 from . import VERSION
 from .bridge import control
 
 def check_stock(path: Path):
     source = path.resolve(strict=True)
-    sha = subprocess.run(["git", "-C", str(source), "rev-parse", "HEAD"], check=True,
-                         capture_output=True, text=True).stdout.strip()
-    dirty = subprocess.run(["git", "-C", str(source), "status", "--porcelain", "--untracked-files=no"],
-                           check=True, capture_output=True, text=True).stdout
-    if sha not in SUPPORTED_STOCK_SHAS or dirty:
-        versions = ", ".join(f"v{version}" for version in STOCK_VERSION_SHAS)
-        raise ValueError(f"Requires clean official Hermes {versions} source; no core overlay is supported")
+    plugin_root = Path(__file__).resolve().parents[1]
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join((str(source), str(plugin_root))))
+    result = subprocess.run(
+        [sys.executable, "-c",
+         "from fleet_connector.compat import require_hermes_apis; require_hermes_apis()"],
+        env=env, cwd=source, capture_output=True, text=True, timeout=15)
+    if result.returncode:
+        detail = (result.stderr or result.stdout).strip().splitlines()
+        reason = detail[-1] if detail else "required APIs could not be imported"
+        raise ValueError(f"Hermes host does not expose required plugin capabilities: {reason}")
     return source
 
 def check_policy(home: Path, source: Path):
@@ -91,12 +93,7 @@ def pending_host(home: Path):
     return cfg
 
 def check_existing_backend(path: Path):
-    source = path.resolve(strict=True)
-    sha = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
-    dirty = subprocess.check_output(["git", "-C", str(source), "status", "--porcelain", "--untracked-files=no"], text=True)
-    if sha not in SUPPORTED_STOCK_SHAS | {AUDITED_GATEWAY_SHA} or dirty:
-        raise ValueError("Existing backend source has not been audited")
-    return source
+    return check_stock(path)
 
 def serve(home: Path, cfg: dict):
     if not sys.version_info >= (3,14):

@@ -3,7 +3,7 @@ version: 0.1.5
 description: Owner-authorized Telegram pairing for Hermes Fleet DEV 12 through a separate private connector service.
 author: Hermes Fleet
 kind: standalone
-requires_hermes: ">=0.21.6,<0.22.2"
+requires_hermes: ">=0.21.6"
 python_dependencies:
   - "fastapi>=0.133.1,<0.134"
   - "uvicorn>=0.41.0,<0.42"

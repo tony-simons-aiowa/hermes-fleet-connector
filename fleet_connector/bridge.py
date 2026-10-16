@@ -2,10 +2,24 @@
 from __future__ import annotations
 import asyncio
 import json
+import logging
 import socket
 import time
 from pathlib import Path
-from .settings import root, load, private_json, STOCK_VERSION_SHAS
+from .settings import root, load, private_json
+from .compat import require_hermes_apis
+
+logger = logging.getLogger(__name__)
+
+
+def _private_callback_authorized(adapter, user_id: str, chat_id: str) -> bool:
+    check = getattr(adapter, "_is_callback_user_authorized", None)
+    if not callable(check):
+        logger.warning(
+            "Telegram adapter lacks its callback authorization method; refusing Fleet command"
+        )
+        return False
+    return check(user_id, chat_id=chat_id, chat_type="dm") is True
 
 def owner_event(update, owners: list[int]) -> bool:
     m = getattr(update, "message", None)
@@ -45,15 +59,10 @@ def socket_path(home: Path) -> Path:
     return Path(f"/tmp/hfc-{os.getuid()}-{hashlib.sha256(str(home.resolve()).encode()).hexdigest()[:16]}") / "control.sock"
 
 def register(ctx) -> None:
-    from hermes_cli.version_info import get_version_info
+    require_hermes_apis(ctx)
     from hermes_constants import get_hermes_home
     from hermes_cli.plugin_isolation import isolation_mode
-    running = get_version_info()
-    expected_sha = STOCK_VERSION_SHAS.get(running.base_version)
-    if not expected_sha or running.commit != expected_sha or running.dirty:
-        versions = ", ".join(f"v{version}" for version in STOCK_VERSION_SHAS)
-        raise RuntimeError(f"Requires clean official Hermes {versions} source; no core overlay is supported")
-    if isolation_mode() == "host":
+    if isolation_mode() != "in_process":
         raise RuntimeError("Fleet requires native Telegram handlers; host isolation is preserved")
     expected_home = Path(get_hermes_home()).resolve()
     from .backend_provider import BackendLeaseProvider
@@ -70,9 +79,9 @@ def register(ctx) -> None:
                 if command == "/fleetsetup":
                     if not owner_event(update, [getattr(update.effective_user, "id", None)]):
                         return
-                    decision = adapter._is_callback_user_authorized(
-                        str(update.effective_user.id), chat_id=str(update.effective_chat.id), chat_type="dm")
-                    if decision is not True or len(update.message.text.split()) != 1:
+                    if (not _private_callback_authorized(
+                            adapter, str(update.effective_user.id), str(update.effective_chat.id))
+                            or len(update.message.text.split()) != 1):
                         return
                     if (root(home) / "settings.json").exists():
                         await update.message.reply_text("Fleet is configured. Use /fleetstatus; existing owner binding is preserved.")
@@ -91,9 +100,9 @@ def register(ctx) -> None:
                 if not owner_event(update, cfg["owners"]):
                     return
                 # Established runner policy, including allowlists and gateway pairing.
-                decision = adapter._is_callback_user_authorized(
-                    str(update.effective_user.id), chat_id=str(update.effective_chat.id), chat_type="dm")
-                if decision is not True or context.bot.id != cfg["bot_id"]:
+                if (not _private_callback_authorized(
+                        adapter, str(update.effective_user.id), str(update.effective_chat.id))
+                        or context.bot.id != cfg["bot_id"]):
                     return
                 actions = {"/fleetstatus": "status", "/fleetqr": "issue", "/fleetdevices": "devices"}
                 action = actions.get(command)
