@@ -1,0 +1,10 @@
+{
+  "name": "fleet-liveops",
+  "label": "Fleet Live Reporting",
+  "description": "Read-only session and subagent reporting included with Hermes Fleet Connector.",
+  "icon": "activity",
+  "version": "0.3.0",
+  "tab": {"hidden": true},
+  "entry": "index.js",
+  "api": "plugin_api.py"
+}

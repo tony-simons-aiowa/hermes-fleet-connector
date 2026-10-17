@@ -3,13 +3,26 @@ from __future__ import annotations
 
 from typing import Any
 
-REQUIRED_CONTEXT_METHODS = (
+REQUIRED_COMMAND_METHODS = (
+    "register_command",
+    "register_cli_command",
+)
+REQUIRED_NATIVE_METHODS = (
     "register_platform_handler",
     "register_dashboard_auth_provider",
 )
 
 
-def require_hermes_apis(ctx: Any | None = None) -> None:
+def require_reporting_apis(server: Any, registry: Any) -> None:
+    """Reporting is optional and must prove its live registry even when idle."""
+    if (not isinstance(getattr(server, "_sessions", None), dict)
+            or not hasattr(getattr(server, "_sessions_lock", None), "__enter__")
+            or not callable(getattr(server, "_session_live_item", None))
+            or not callable(getattr(registry, "list_active_subagents", None))):
+        raise AttributeError("Live reporting registry capability unavailable")
+
+
+def require_hermes_apis(ctx: Any | None = None, *, native: bool = True) -> None:
     """Fail closed unless the host exposes the plugin APIs this connector uses.
 
     When called by the plugin loader, inspect the supplied public context instance.
@@ -25,7 +38,8 @@ def require_hermes_apis(ctx: Any | None = None) -> None:
     else:
         context = ctx
 
-    missing = [name for name in REQUIRED_CONTEXT_METHODS
+    methods = REQUIRED_COMMAND_METHODS + (REQUIRED_NATIVE_METHODS if native else ())
+    missing = [name for name in methods
                if not callable(getattr(context, name, None))]
     if missing:
         names = ", ".join(f"PluginContext.{name}" for name in missing)

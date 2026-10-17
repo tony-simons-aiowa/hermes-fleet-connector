@@ -23,6 +23,8 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 from . import devices
+from . import owners as owners_mod
+from .pin import PinCache, PinUnavailable
 from .settings import root
 from .bridge import socket_path
 from .display import DisplayFailure, display_capability
@@ -31,7 +33,10 @@ from . import VERSION
 
 NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 ERRORS = {"invalid": 404, "expired": 410, "cancelled": 410, "already_used": 409,
-          "invalid_credential": 401, "invalid_request": 400, "too_many_pending": 429}
+          "invalid_credential": 401, "invalid_request": 400, "too_many_pending": 429,
+          "approval_required": 403, "approval_not_supported": 409, "rate_limited": 429}
+PROTOCOLS = [1, 2]
+REQUEST_TTL = devices.REQUEST_TTL_SECONDS
 SUMMARY = "Chat with the agents on this gateway, run and review their work, and manage them - the same access as signing in."
 HTTP_PATHS = {"/api/media", "/api/cron/delivery-targets", "/api/cron/jobs",
               "/api/plugins/fleet-liveops/snapshot"}
@@ -70,25 +75,77 @@ class Redeem(Proof):
     device_name: str = Field(default="", max_length=64)
     device_model: str = Field(default="", max_length=64)
 
+_TOKEN = r"^[A-Za-z0-9_-]+$"
+
+class PairRequest(Proof):
+    device_name: str = Field(default="", max_length=64)
+    device_model: str = Field(default="", max_length=64)
+    client_secret: str = Field(min_length=43, max_length=128, pattern=_TOKEN)
+
+class RequestStatusBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: str = Field(min_length=16, max_length=64, pattern=_TOKEN)
+    client_secret: str = Field(min_length=43, max_length=128, pattern=_TOKEN)
+
 class Credential(BaseModel):
     model_config = ConfigDict(extra="forbid")
     device_credential: str = Field(max_length=200)
+
+PAIR_STYLE = ("body{font:16px/1.5 -apple-system,system-ui,sans-serif;margin:0;padding:32px 20px;"
+              "max-width:30em;margin:auto;color:#111;background:#fff}"
+              "@media(prefers-color-scheme:dark){body{color:#eee;background:#111}}"
+              "a.go{display:block;text-align:center;padding:14px;border-radius:12px;background:#0a6cff;"
+              "color:#fff;text-decoration:none;font-weight:600;margin:24px 0 12px}"
+              "a.alt{font-size:13px}p.hint{color:#777;font-size:14px}[hidden]{display:none}")
+PAIR_SCRIPT = r"""(function(){
+var f=location.hash.replace(/^#/,'');
+var ok=/^[A-Za-z0-9_=&.-]{1,600}$/.test(f)&&/(^|&)v=2(&|$)/.test(f)&&/(^|&)i=[A-Za-z0-9_-]+(&|$)/.test(f)&&/(^|&)s=[A-Za-z0-9_-]+(&|$)/.test(f)&&/(^|&)k=[A-Za-z0-9_-]{43}(&|$)/.test(f);
+if(!ok){document.getElementById('bad').hidden=false;return;}
+var o=btoa(location.origin).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+var t=f+'&o='+o;
+document.getElementById('go').href='hermes-fleet-dev://pair#'+t;
+document.getElementById('alt').href='hermes-fleet://pair#'+t;
+document.getElementById('ok').hidden=false;
+})();"""
+PAIR_HTML = ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
+    '<meta name="viewport" content="width=device-width,initial-scale=1">'
+    '<meta name="referrer" content="no-referrer"><title>Connect to Hermes</title>'
+    f'<style>{PAIR_STYLE}</style></head><body><h1>Connect to Hermes</h1>'
+    '<div id="ok" hidden><p>Open this link on your iPhone to connect it to this Hermes.</p>'
+    '<a class="go" id="go" href="#">Open in Hermes Fleet</a>'
+    '<p><a class="alt" id="alt" href="#">Open in the App Store build instead</a></p>'
+    '<p class="hint">Don\'t have the app? It\'s in TestFlight.</p></div>'
+    '<div id="bad" hidden><p>This link looks incomplete. Ask Hermes for a new one.</p></div>'
+    '<noscript><p>Turn on JavaScript to open this link in Hermes Fleet.</p></noscript>'
+    f'<script>{PAIR_SCRIPT}</script></body></html>')
+def _csp_hash(text: str) -> str:
+    import base64
+    return "'sha256-" + base64.b64encode(hashlib.sha256(text.encode()).digest()).decode() + "'"
+PAIR_HEADERS = {**NO_STORE, "Content-Security-Policy": (
+    f"default-src 'none'; script-src {_csp_hash(PAIR_SCRIPT)}; style-src {_csp_hash(PAIR_STYLE)}; "
+    "base-uri 'none'; form-action 'none'; frame-ancestors 'none'"),
+    "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
+    "X-Frame-Options": "DENY"}
 
 def fail(code: str, status: int | None = None):
     return JSONResponse({"error": code, "detail": "Fleet request refused."},
                         status_code=status or ERRORS.get(code, 400), headers=NO_STORE)
 
 class Connector:
-    def __init__(self, home: Path, cfg: dict, backend_token: str, *, store=None):
+    def __init__(self, home: Path, cfg: dict, backend_token: str, *, store=None, owners=None,
+                 pin_cache=None):
         self.home, self.cfg = home.resolve(), cfg
         self.directory = root(home)
         self.store = store or devices.FleetDeviceStore(self.directory / "devices.sqlite3")
+        self.owners = owners or owners_mod.OwnerRegistry(self.directory)
+        self.pins = pin_cache or PinCache()
         self.backend_token = backend_token
         self.backend = f"http://127.0.0.1:{cfg['backend_port']}"
         self.instance = devices.get_instance_id(self.directory)
         self.lock = threading.Lock()
         self.tickets: dict[str, tuple[float, str]] = {}
         self.rate = deque()
+        self.status_rate = deque()
         self.active = False
         self.viewer_factory = PrivateViewer
         self.viewer = None
@@ -115,20 +172,24 @@ class Connector:
             return None
         return session
 
-    def rate_ok(self):
+    def rate_ok(self, polling=False):
         # A bounded shared budget cannot be bypassed with a forged forwarding header.
+        # Pairing-request polling (one call per ~2 s per phone) has its own larger budget so a
+        # waiting phone cannot starve, or be starved by, everything else.
+        bucket, limit = (self.status_rate, 240) if polling else (self.rate, 60)
         now = time.monotonic()
         with self.lock:
-            while self.rate and self.rate[0] < now - 60:
-                self.rate.popleft()
-            if len(self.rate) >= 60:
+            while bucket and bucket[0] < now - 60:
+                bucket.popleft()
+            if len(bucket) >= limit:
                 return False
-            self.rate.append(now)
+            bucket.append(now)
             return True
 
     def readiness(self, *, network=True, observations=True):
         blockers = []
-        if not self.cfg.get("owners"):
+        # Legacy /fleetqr readiness stays strict: it needs a bound Telegram owner and bot.
+        if not self.cfg.get("owners") or not self.cfg.get("bot_id"):
             blockers.append("owner_binding_pending")
         try:
             with httpx.Client(timeout=4, trust_env=False) as client:
@@ -223,8 +284,135 @@ class Connector:
         if self.display_thread and self.display_thread is not threading.current_thread():
             self.display_thread.join(timeout=15)
 
+    # -- universal login control actions (approver-based) ----------------------------------------
+
+    V2_ACTIONS = {"pair", "pending", "approve", "deny", "devices", "revoke", "status", "claim_start",
+                  "claim", "owners", "owners_remove"}
+
+    @staticmethod
+    def _refuse(error, message):
+        return {"ok": False, "error": error, "message": message}
+
+    def pin(self):
+        return self.pins.get(self.cfg["origin"])
+
+    def backend_ok(self):
+        try:
+            with httpx.Client(timeout=4, trust_env=False) as client:
+                response = client.get(self.backend + "/api/cron/jobs", headers=self.backend_headers())
+                return response.status_code == 200 and isinstance(response.json(), (dict, list))
+        except Exception:
+            return False
+
+    def control_v2(self, proof):
+        action = proof.get("action")
+        approver = proof.get("approver")
+        platform = approver.get("platform") if isinstance(approver, dict) else None
+        user_id = approver.get("user_id") if isinstance(approver, dict) else None
+        if action == "claim":
+            # Anyone may attempt a claim; the code is the credential (5 attempts, 10 minutes).
+            entry = self.owners.claim(proof.get("code"), proof.get("platform"), proof.get("user_id"))
+            if entry is None:
+                return self._refuse("invalid_code", "That claim code is invalid or has expired. Run `hermes fleet claim` on the computer running Hermes for a new one.")
+            return {"ok": True, "owner": {"platform": entry["platform"], "user_id": entry["user_id"]},
+                    "message": "You are now an owner of this Hermes for Fleet."}
+        if not self.owners.is_owner(platform, user_id):
+            return self._refuse("not_owner", "Only this Hermes owner can do that. On the computer running Hermes, run `hermes fleet claim` and send the code here as `/fleet claim <code>`.")
+        who = {"platform": platform, "user_id": user_id}
+        try:
+            if action == "claim_start":
+                if platform != owners_mod.LOCAL:
+                    return self._refuse("not_owner", "Claim codes can only be created on the computer running Hermes.")
+                code, expires_at = self.owners.start_claim()
+                return {"ok": True, "code": code, "expires_at": expires_at,
+                        "message": f"Claim code {code[:3]} {code[3:]} (valid 10 minutes, one use). In a private chat send: /fleet claim {code}"}
+            if action == "pair":
+                try:
+                    pin = self.pin()
+                except PinUnavailable:
+                    return self._refuse("pin_unavailable", "Can't read this server's HTTPS certificate yet, so a safe link can't be made. Check that the HTTPS address is reachable from this computer (`hermes fleet status`).")
+                issued = self.store.create_invitation(
+                    origin=self.cfg["origin"], created_by=f"{platform}:{user_id}",
+                    ttl_seconds=devices.DEFAULT_TTL_SECONDS, requires_approval=True)
+                link = f"{self.cfg['origin']}/pair#v=2&i={issued.invitation.id}&s={issued.secret}&k={pin}"
+                return {"ok": True, "link": link, "expires_at": issued.invitation.expires_at,
+                        "message": "Open this link on your iPhone, then approve the code Fleet shows. Works once, expires in 10 minutes."}
+            if action == "pending":
+                pending = self.store.list_pending()
+                return {"ok": True, "requests": [
+                    {"match_code": r.match_code, "device_name": r.device_name,
+                     "device_model": r.device_model, "created_at": r.created_at,
+                     "expires_at": r.expires_at} for r in pending],
+                    "message": ("Waiting: " + "; ".join(f"{r.device_name} (code {r.match_code})" for r in pending)) if pending else "No phones are waiting for approval."}
+            if action in {"approve", "deny"}:
+                try:
+                    if action == "approve":
+                        d = self.store.approve_by_code(code=proof.get("code"), approver_platform=platform, approver_user_id=user_id)
+                        return {"ok": True, "device": {"id": d.id, "label": d.label, "device_model": d.device_model, "created_at": d.created_at},
+                                "message": f"Approved {d.label}. It's connecting now."}
+                    r = self.store.deny_by_code(code=proof.get("code"), approver_platform=platform, approver_user_id=user_id)
+                    return {"ok": True, "message": f"Denied {r.device_name}."}
+                except devices.NoMatch:
+                    return self._refuse("no_match", "No phone is waiting with that code. If Fleet on your phone shows a different code, it may be talking to a different server - don't approve it.")
+                except devices.Locked:
+                    return self._refuse("locked", "Too many wrong codes. Try again in 10 minutes.")
+            if action == "devices":
+                listed = self.store.list_devices()
+                rows = [{"number": n, "id": d.id, "label": d.label, "device_model": d.device_model,
+                         "created_at": d.created_at, "last_used_at": d.last_used_at}
+                        for n, d in enumerate(listed, 1)]
+                text = "\n".join(f"{r['number']}. {r['label']}" + (f" ({r['device_model']})" if r["device_model"] else "") for r in rows)
+                return {"ok": True, "devices": rows, "message": text or "No devices are connected."}
+            if action == "revoke":
+                target = proof.get("device")
+                listed = self.store.list_devices()
+                device_id = None
+                if isinstance(target, bool):
+                    target = None
+                if isinstance(target, str) and target.isascii() and target.isdigit() and len(target) <= 4:
+                    target = int(target)
+                if isinstance(target, int):
+                    if 1 <= target <= len(listed):
+                        device_id = listed[target - 1].id
+                elif isinstance(target, str) and any(d.id == target for d in listed):
+                    device_id = target
+                if device_id is None or not self.store.revoke_device(device_id):
+                    return self._refuse("no_such_device", "No such device. Use `/fleet devices` to see the numbers.")
+                return {"ok": True, "message": "Device revoked. It can no longer connect."}
+            if action == "status":
+                try:
+                    pin_ok = self.pin() is not None
+                except PinUnavailable:
+                    pin_ok = False
+                backend = self.backend_ok()
+                parts = [f"Server {self.cfg['origin']}", "certificate pin ready" if pin_ok else "certificate pin NOT available (links can't be made)",
+                         "Hermes backend reachable" if backend else "Hermes backend NOT reachable", f"connector {VERSION}"]
+                return {"ok": True, "origin": self.cfg["origin"], "pin_computed": pin_ok, "backend_ok": backend,
+                        "version": VERSION, "devices": len(self.store.list_devices()),
+                        "pending": len(self.store.list_pending()), "message": ". ".join(parts) + "."}
+            if action == "owners":
+                rows = [{"number": n, **o} for n, o in enumerate(self.owners.list_owners(), 1)]
+                text = "\n".join(f"{r['number']}. {r['platform']}:{r['user_id']} ({r['added_via']})" for r in rows)
+                return {"ok": True, "owners": rows, "message": (text + "\n" if text else "") + "Local access on this computer is always an owner."}
+            if action == "owners_remove":
+                removed = self.owners.remove_owner(proof.get("index"))
+                if removed is None:
+                    return self._refuse("no_such_owner", "No such owner number. Use `hermes fleet owners` to see them.")
+                return {"ok": True, "message": f"Removed {removed['platform']} owner."}
+        except devices.TooManyInvitations:
+            return self._refuse("too_many_pending", "Too many open links. Wait for them to expire, then try again.")
+        except devices.PairingError:
+            return self._refuse("invalid_request", "That request wasn't valid.")
+        return self._refuse("unknown_action", "Unknown Fleet action.")
+
     def owner(self, proof):
         action = proof.get("action")
+        if action == "backend_maintenance":
+            from .maintenance import backend_maintenance
+            return backend_maintenance(self, proof)
+        if "approver" in proof or action in {"claim", "claim_start", "pair", "pending", "deny", "owners", "owners_remove"}:
+            if action in self.V2_ACTIONS:
+                return self.control_v2(proof)
         if action in {"status", "approve", "revoke"} and proof.get("local_operator") is True:
             # Same-UID, owner-only Unix socket is the legitimate local owner boundary.
             if action == "approve":
@@ -234,8 +422,8 @@ class Connector:
                 return {"ok": True, "message": "Owner observations recorded for this process for ten minutes."}
             if action == "revoke":
                 return {"ok": self.store.revoke_device(proof.get("device_id")), "message": "Requested device revocation completed if the device existed."}
-        elif (type(proof.get("owner")) is not int or proof["owner"] not in self.cfg["owners"]
-              or type(proof.get("bot_id")) is not int or proof["bot_id"] != self.cfg["bot_id"]
+        elif (type(proof.get("owner")) is not int or proof["owner"] not in (self.cfg.get("owners") or [])
+              or type(proof.get("bot_id")) is not int or not self.cfg.get("bot_id") or proof["bot_id"] != self.cfg["bot_id"]
               or type(proof.get("update_id")) is not int or proof["update_id"] < 0):
             return {"ok": False, "message": "Owner authorization refused."}
         if action == "status":
@@ -332,7 +520,7 @@ def make_app(connector: Connector):
             return fail("https_or_origin_required", 426)
         if request.headers.get("origin") not in (None, c.cfg["origin"]):
             return fail("cross_origin", 403)
-        if not c.rate_ok():
+        if not c.rate_ok(polling=request.url.path == "/api/fleet/pairing/request/status"):
             return fail("rate_limited", 429)
         # Bounded streaming read: do not trust Content-Length; do not reflect validation payloads.
         body = bytearray()
@@ -355,8 +543,10 @@ def make_app(connector: Connector):
         try:
             i = c.store.preview(invitation_id=body.invitation_id, secret=body.secret, origin=c.cfg["origin"])
             return {"gateway": c.gateway(), "invitation": {"id": i.id, "label": i.label,
-                    "scopes": list(i.scopes), "expires_at": i.expires_at, "server_time": int(time.time())},
-                    "access": [{"scope": devices.SCOPE_OPERATOR, "summary": SUMMARY}]}
+                    "scopes": list(i.scopes), "expires_at": i.expires_at, "server_time": int(time.time()),
+                    "approval_required": i.requires_approval},
+                    "access": [{"scope": devices.SCOPE_OPERATOR, "summary": SUMMARY}],
+                    "protocols": PROTOCOLS}
         except devices.PairingError as e:
             return fail(e.code)
 
@@ -368,6 +558,37 @@ def make_app(connector: Connector):
                     "gateway": c.gateway(), "scopes": list(d.device.scopes)}
         except devices.PairingError as e:
             return fail(e.code)
+
+    @app.get("/pair")
+    async def pair_page():
+        # Static: the invitation lives in the URL fragment, which never reaches the server.
+        return Response(PAIR_HTML, media_type="text/html; charset=utf-8", headers=PAIR_HEADERS)
+
+    @app.post("/api/fleet/pairing/request", status_code=201)
+    async def pairing_request(body: PairRequest):
+        try:
+            r = c.store.create_request(
+                invitation_id=body.invitation_id, secret=body.secret, client_secret=body.client_secret,
+                device_name=body.device_name, device_model=body.device_model, origin=c.cfg["origin"])
+            return {"request": {"id": r.id, "match_code": r.match_code, "expires_at": r.expires_at,
+                                "poll_interval": devices.POLL_INTERVAL_SECONDS,
+                                "server_time": int(time.time())},
+                    "gateway": c.gateway()}
+        except devices.PairingError as e:
+            return fail(e.code)
+
+    @app.post("/api/fleet/pairing/request/status")
+    async def pairing_request_status(body: RequestStatusBody):
+        try:
+            st = c.store.request_status(request_id=body.request_id, client_secret=body.client_secret)
+        except devices.PairingError as e:
+            return fail(e.code)
+        if st.status == "pending":
+            return {"status": "pending", "expires_at": st.expires_at, "server_time": int(time.time())}
+        if st.status == "approved":
+            return {"status": "approved", "device": {"id": st.device_id, "label": st.device_label},
+                    "credential": st.credential, "gateway": c.gateway(), "scopes": list(st.scopes)}
+        return {"status": st.status}
 
     @app.post("/auth/device-login")
     async def login(body: Credential):
@@ -405,6 +626,10 @@ def make_app(connector: Connector):
         full = "/api/" + path
         if c.session(request) is None:
             return fail("unauthenticated", 401)
+        # Reporting is observational. Do not forward methods other than GET,
+        # even if a future dashboard extension adds a mutating handler here.
+        if full == "/api/plugins/fleet-liveops/snapshot" and request.method != "GET":
+            return fail("out_of_scope", 403)
         if (full not in HTTP_PATHS and not (full.startswith("/api/cron/jobs/") and ".." not in full and "%" not in full)
                 and not kanban_allowed(full, request.method)):
             return fail("out_of_scope", 403)
@@ -417,6 +642,13 @@ def make_app(connector: Connector):
                     params=request.query_params, content=await request.body(), headers=headers)
                 if 300 <= response.status_code < 400 or len(response.content) > 8 * 1024 * 1024:
                     return fail("backend_response_refused", 502)
+                if (full == "/api/plugins/fleet-liveops/snapshot" and response.status_code == 404
+                        and not request.query_params):
+                    from .reporting_setup import missing_route_diagnostic
+                    from .reporting import empty_snapshot
+                    diagnosis = await asyncio.to_thread(missing_route_diagnostic, c.home)
+                    if diagnosis is not None:
+                        return JSONResponse(empty_snapshot(*diagnosis), headers=NO_STORE)
                 return Response(response.content, status_code=response.status_code,
                                 media_type=response.headers.get("content-type"), headers=NO_STORE)
         except httpx.HTTPError:
