@@ -46,5 +46,11 @@ def test_managed_isolation_is_not_changed(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME",str(tmp_path))
     (tmp_path/"config.yaml").write_text("plugins:\n  isolation: host\n")
     from fleet_connector.bridge import register
-    with pytest.raises(RuntimeError):register(NS())
+    seen=NS(commands=[],cli=[],native=[])
+    ctx=NS(register_command=lambda n,h,**k:seen.commands.append(n),
+           register_cli_command=lambda n,**k:seen.cli.append(n),
+           register_platform_handler=lambda *a:seen.native.append(a),
+           register_dashboard_auth_provider=lambda *a:seen.native.append(a))
+    register(ctx)  # host isolation skips only the legacy native handlers
+    assert seen.commands==["fleet"] and seen.cli==["fleet"] and seen.native==[]
     assert "isolation: host" in (tmp_path/"config.yaml").read_text()

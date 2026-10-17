@@ -18,7 +18,8 @@ def _install_host(root: Path, *, missing=(), isolation="in_process", version="99
     (package / "__init__.py").write_text("")
     methods = [
         f"    def {name}(self, *args, **kwargs): pass"
-        for name in ("register_platform_handler", "register_dashboard_auth_provider")
+        for name in ("register_command", "register_cli_command",
+                     "register_platform_handler", "register_dashboard_auth_provider")
         if name not in missing
     ]
     (package / "plugins.py").write_text("class PluginContext:\n" + "\n".join(methods) + "\n")
@@ -51,6 +52,8 @@ def test_gitless_install_shapes_accept_future_hosts_with_required_apis(tmp_path,
 
 
 @pytest.mark.parametrize("missing", [
+    "register_command",
+    "register_cli_command",
     "register_platform_handler",
     "register_dashboard_auth_provider",
 ])

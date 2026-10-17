@@ -57,10 +57,15 @@ def load(home: Path) -> dict:
     if cfg.get("home") != str(home.resolve()):
         raise ValueError("Profile mismatch")
     cfg["origin"] = normalise_origin(cfg["origin"])
-    if (not isinstance(cfg.get("owners"), list) or not cfg["owners"]
-            or any(type(v) is not int or v <= 0 for v in cfg["owners"])
-            or type(cfg.get("bot_id")) is not int or cfg["bot_id"] <= 0):
-        raise ValueError("Exact numeric owner and bot account required")
+    # Telegram is optional: a host may have no Telegram owners or bot at all. Messaging owners
+    # then come from `hermes fleet claim` (owners.json). When present, values must be exact.
+    owners = cfg.get("owners")
+    if owners is not None and (not isinstance(owners, list)
+                               or any(type(v) is not int or v <= 0 for v in owners)):
+        raise ValueError("Exact numeric owner account required")
+    bot_id = cfg.get("bot_id")
+    if bot_id is not None and (type(bot_id) is not int or bot_id < 0):
+        raise ValueError("Exact numeric bot account required")
     ports = (cfg.get("port"), cfg.get("backend_port"))
     if any(type(x) is not int or not 1024 <= x <= 65535 for x in ports) or ports[0] == ports[1]:
         raise ValueError("Distinct unprivileged ports required")

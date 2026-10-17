@@ -20,6 +20,7 @@ def _private_callback_authorized(adapter, user_id: str, chat_id: str) -> bool:
         )
         return False
     return check(user_id, chat_id=chat_id, chat_type="dm") is True
+from .control import control, socket_path  # noqa: F401 (re-exported for service/__main__)
 
 def owner_event(update, owners: list[int]) -> bool:
     m = getattr(update, "message", None)
@@ -39,35 +40,29 @@ def owner_event(update, owners: list[int]) -> bool:
         "forward_origin", "forward_date", "forward_from", "forward_from_chat",
         "forward_sender_name", "via_bot", "is_automatic_forward", "sender_chat"))
 
-def control(home: Path, payload: dict) -> dict:
-    # macOS AF_UNIX sun_path is small; use the same short owned path on both sides.
-    path = socket_path(home)
-    with socket.socket(socket.AF_UNIX) as conn:
-        conn.settimeout(25)
-        conn.connect(str(path))
-        conn.sendall(json.dumps(payload).encode() + b"\n")
-        data = b""
-        while b"\n" not in data and len(data) < 8192:
-            chunk = conn.recv(4096)
-            if not chunk:
-                break
-            data += chunk
-    return json.loads(data)
-
-def socket_path(home: Path) -> Path:
-    import hashlib, os
-    return Path(f"/tmp/hfc-{os.getuid()}-{hashlib.sha256(str(home.resolve()).encode()).hexdigest()[:16]}") / "control.sock"
-
 def register(ctx) -> None:
-    require_hermes_apis(ctx)
+    import logging
     from hermes_constants import get_hermes_home
     from hermes_cli.plugin_isolation import isolation_mode
-    if isolation_mode() != "in_process":
-        raise RuntimeError("Fleet requires native Telegram handlers; host isolation is preserved")
+    log = logging.getLogger(__name__)
+    in_process = isolation_mode() != "host"
+    require_hermes_apis(ctx, native=in_process)
     expected_home = Path(get_hermes_home()).resolve()
-    from .backend_provider import BackendLeaseProvider
-    ctx.register_dashboard_auth_provider(BackendLeaseProvider(expected_home))
+    # Platform-neutral flow first: it must not depend on Telegram or on in-process isolation.
+    from .commands import register_chat_command
+    from .cli import register_cli
+    register_chat_command(ctx, lambda: expected_home)
+    register_cli(ctx)
+    if not in_process:
+        log.warning("Fleet: plugins.isolation is 'host'; skipping legacy Telegram handlers and the "
+                    "dashboard auth provider (both need in-process isolation). /fleet still works.")
+    else:
+        from .backend_provider import BackendLeaseProvider
+        ctx.register_dashboard_auth_provider(BackendLeaseProvider(expected_home))
+        register_legacy_telegram(ctx, expected_home)
 
+def register_legacy_telegram(ctx, expected_home: Path) -> None:
+    from hermes_constants import get_hermes_home
     def factory(native, adapter):
         from telegram.ext import CommandHandler
         async def handle(update, context):
@@ -97,12 +92,12 @@ def register(ctx) -> None:
                     await update.message.reply_text("Verified Telegram setup request recorded for ten minutes. The host owner must review the request, approve owner binding and activate the private connector. No invitation was issued. Follow the connector README, then /fleetstatus and /fleetqr.")
                     return
                 cfg = load(home)
-                if not owner_event(update, cfg["owners"]):
+                if not owner_event(update, cfg.get("owners") or []):
                     return
                 # Established runner policy, including allowlists and gateway pairing.
                 if (not _private_callback_authorized(
                         adapter, str(update.effective_user.id), str(update.effective_chat.id))
-                        or context.bot.id != cfg["bot_id"]):
+                        or not cfg.get("bot_id") or context.bot.id != cfg["bot_id"]):
                     return
                 actions = {"/fleetstatus": "status", "/fleetqr": "issue", "/fleetdevices": "devices"}
                 action = actions.get(command)

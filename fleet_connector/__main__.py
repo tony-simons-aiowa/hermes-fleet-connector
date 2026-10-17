@@ -17,6 +17,7 @@ from . import VERSION
 from .bridge import control
 
 def check_stock(path: Path):
+    """Check the public Hermes APIs, without requiring Git metadata or a release label."""
     source = path.resolve(strict=True)
     plugin_root = Path(__file__).resolve().parents[1]
     env = dict(os.environ, PYTHONPATH=os.pathsep.join((str(source), str(plugin_root))))
@@ -36,7 +37,7 @@ def check_policy(home: Path, source: Path):
         "import hermes_bootstrap; from hermes_cli.plugin_isolation import isolation_mode; print(isolation_mode())"],
         env=env, cwd=source, check=True, capture_output=True, text=True, timeout=15)
     if result.stdout.strip() != "in_process":
-        raise ValueError("Native Telegram handler is incompatible with effective host isolation; policy is preserved")
+        raise ValueError("Connector service is incompatible with effective host isolation; native dashboard auth requires in_process and policy is preserved")
 
 def configure(home: Path, args):
     backend_mode = getattr(args, "backend_mode", "owned_stock")
@@ -49,11 +50,16 @@ def configure(home: Path, args):
         if request["home"] != str(home) or time.time() >= request["expires_at"]:
             raise ValueError("Fresh genuine Telegram request required")
         owners, bot_id = [request["owner"]], request["bot_id"]
-    if not owners or bot_id is None:
-        raise ValueError("Use fresh Telegram setup request or explicitly verified numeric account IDs")
-    cfg = {"home": str(home), "origin": normalise_origin(args.origin), "owners": owners,
-           "bot_id": bot_id, "port": args.port, "backend_port": args.backend_port,
-           "hermes_root": str(source), "display_name": "Hermes Fleet", "version": VERSION}
+    telegram = bool(owners) or bot_id is not None
+    if telegram and not getattr(args, "approve_owner_binding", False):
+        raise ValueError("Telegram owner binding requires --approve-owner-binding")
+    if telegram and (not owners or bot_id is None):
+        raise ValueError("Telegram setup needs both an owner and a bot ID (or a fresh Telegram setup request)")
+    cfg = {"home": str(home), "origin": normalise_origin(args.origin)}
+    if telegram:
+        cfg.update(owners=owners, bot_id=bot_id)
+    cfg.update(port=args.port, backend_port=args.backend_port,
+               hermes_root=str(source), display_name="Hermes Fleet", version=VERSION)
     if backend_mode == "existing_gated":
         cfg["backend_mode"] = backend_mode
     path = root(home) / "settings.json"
@@ -61,7 +67,7 @@ def configure(home: Path, args):
         if load(home) != cfg:
             raise ValueError("Existing connector configuration differs; preserve it and review changes first")
         return {"ok": True, "message": "Identical connector settings already installed."}
-    if any(type(v) is not int or v <= 0 for v in cfg["owners"]) or cfg["bot_id"] <= 0:
+    if telegram and (any(type(v) is not int or v <= 0 for v in cfg["owners"]) or cfg["bot_id"] <= 0):
         raise ValueError("Numeric owner and bot IDs required")
     if args.port == args.backend_port or not all(1024 <= p <= 65535 for p in (args.port,args.backend_port)):
         raise ValueError("Distinct unprivileged ports required")
@@ -200,7 +206,9 @@ def prepare_launchd(home: Path, cfg: dict):
         "ProcessType": "Interactive", "Umask": 63,
         "StandardOutPath": str(directory / "supervisor.log"),
         "StandardErrorPath": str(directory / "supervisor-error.log")}
-    if not cfg["owners"]:
+    # Only the staged host plan (owners == [] and bot_id == 0) needs --pending-setup. A
+    # Telegram-free settings.json has neither key and is a complete configuration.
+    if cfg.get("owners") == [] and cfg.get("bot_id") == 0:
         value["ProgramArguments"].append("--pending-setup")
     path = directory / "service.plist"
     if path.exists() and plistlib.loads(path.read_bytes()) != value:
@@ -286,7 +294,8 @@ def main(argv=None):
     setup.add_argument("--owner", type=int, action="append")
     setup.add_argument("--bot-id", type=int)
     setup.add_argument("--from-telegram-request", action="store_true")
-    setup.add_argument("--approve-owner-binding", action="store_true", required=True)
+    setup.add_argument("--approve-owner-binding", action="store_true",
+                       help="required only with --owner/--bot-id/--from-telegram-request")
     setup.add_argument("--port", type=int, default=9129)
     setup.add_argument("--backend-port", type=int, default=9130)
     setup.add_argument("--backend-mode", choices=["owned_stock", "existing_gated"], default="owned_stock")
@@ -296,6 +305,7 @@ def main(argv=None):
     plan.add_argument("--port", type=int, default=9129)
     plan.add_argument("--backend-port", type=int, default=9119)
     commands.add_parser("status")
+    commands.add_parser("backend-status", help="Inspect backend identity and idle state through the private owner socket")
     service = commands.add_parser("prepare-service")
     service.add_argument("--pending-setup", action="store_true")
     launch = commands.add_parser("serve")
@@ -340,7 +350,7 @@ def main(argv=None):
             unit_path.unlink(missing_ok=True)
             result = {"ok": True, "message": "Prepared supervision removed; pairing data, replay records and settings retained."}
         else:
-            payload = {"action": "approve" if args.command == "observe" else args.command, "local_operator": True}
+            payload = {"action": ("approve" if args.command == "observe" else "backend_maintenance" if args.command == "backend-status" else args.command), "local_operator": True}
             if args.command == "observe":
                 payload.update(phone_tls_verified=True, private_display_verified=True)
             if args.command == "revoke":

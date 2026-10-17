@@ -1,0 +1,38 @@
+name: Observational reporting
+on: [pull_request, push, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  reporting:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        hermes:
+          - 818c13be1dc4fd28987e1e881a9408224afd4535
+          - ca069e12239a2c8d13887ac9f983557d00bdcfd2
+          - e31c674f7c523070f48f3baad0650c2fdd7ef6e5
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      HERMES_HOME: ${{ runner.temp }}/fleet-hermes-home
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: NousResearch/hermes-agent
+          ref: ${{ matrix.hermes }}
+          path: hermes-source
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Prepare disposable Hermes test environment through PM
+        working-directory: hermes-source
+        run: python -m pm.build_env --source . --out "${{ runner.temp }}/fleet-tests" --group dev --group test
+      - name: Reporting, migration, authenticated proxy and real discovery
+        env:
+          PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/hermes-source
+        run: '"${{ runner.temp }}/fleet-tests/bin/python" -m pytest tests/test_reporting*.py -q'
+      - name: Prepare exact-source archive without uploading
+        run: python scripts/build_release.py --sha "${{ github.sha }}" --output "${{ runner.temp }}/fleet-release"
