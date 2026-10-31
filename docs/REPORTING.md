@@ -1,8 +1,9 @@
 # Read-only Live Operations reporting
 
-Connector 0.3.0 includes the observational Fleet reporter in the same installation.
+Connector 0.3.1 includes the observational Fleet reporter in the same installation.
 It is a local candidate until separately validated and published. Existing public
-connector releases and the catalog pin do not acquire this capability automatically.
+connector releases do not acquire this capability automatically. Admission of this
+release requires a reviewed exact-SHA catalog update.
 
 The package ID stays `hermes-fleet-connector`. Its hidden dashboard extension is
 named `fleet-liveops`, preserving `GET /api/plugins/fleet-liveops/snapshot`.

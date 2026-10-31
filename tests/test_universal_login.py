@@ -263,7 +263,7 @@ def test_status_summary(env):
     c, _ = env
     r = act(c, "status", TG)
     assert r["ok"] and r["origin"] == ORIGIN and r["pin_computed"] is True
-    assert r["backend_ok"] is True and r["version"] == VERSION == "0.3.0" and r["message"]
+    assert r["backend_ok"] is True and r["version"] == VERSION == "0.3.1" and r["message"]
 
 
 def test_claim_and_owner_management(env):

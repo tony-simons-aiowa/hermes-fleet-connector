@@ -187,7 +187,7 @@ def apply(preview):
     installed = root / "plugins" / PACKAGE
     directory(installed)
     package = json.loads(regular(installed / "dashboard/manifest.json")[0])
-    if package.get("name") != CONSENT or package.get("version") != "0.3.0":
+    if package.get("name") != CONSENT or package.get("version") != "0.3.1":
         raise SetupError("Install the combined connector through Hermes before applying this plan")
     if not preview["changes"] and not preview["legacy"]:
         return None

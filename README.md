@@ -1,10 +1,10 @@
-# Hermes Fleet connector 0.3.0
+# Hermes Fleet connector 0.3.1
 
 Connect Hermes Fleet phones from any platform: ask Hermes for a link, approve the code. The connector is an external Hermes plugin plus a separately activated service; it never edits Hermes core. The wire contract is in [docs/universal-login.md](docs/universal-login.md).
 
 ## Read-only Live Operations reporting
 
-Version 0.3.0 bundles Live Operations reporting in the connector installation.
+Version 0.3.1 bundles Live Operations reporting in the connector installation.
 No separate Fleet Live Reporting download is needed after the combined package
 has been installed. Install an exact reviewed commit. Catalog availability depends on the
 separate Nous-maintainer review of its pinned commit.
@@ -125,8 +125,8 @@ The material below documents the original Telegram-only DEV 12 flow, which still
 
 An external Hermes plugin and supervised connector service implementing the Fleet DEV 12 pairing contract. The connector never edits Hermes core. It registers four native Telegram commands through `register_platform_handler`: `/fleetsetup`, `/fleetstatus`, `/fleetqr`, `/fleetdevices`. It registers no model tools, hooks or middleware. Versions 0.1.1 and later also register a supported host-only dashboard session provider for explicitly selected existing-backend mode; see [existing gateway integration](docs/EXISTING_GATEWAY.md).
 
-The original 0.1.x preparation notes below are historical. Public 0.1.5 and its
-catalog pin do not identify 0.3.0. See [publication and validation](docs/PUBLICATION.md)
+The original 0.1.x preparation notes below are historical. The existing public
+catalog pin is 0.3.0 and does not identify 0.3.1. See [publication and validation](docs/PUBLICATION.md)
 for the current release scope; catalog acceptance is a separate maintainer decision.
 
 ### Compatibility and prerequisites

@@ -1,9 +1,9 @@
 # Publication gate and maintained distribution
 
-Connector 0.3.0 is a combined reporting candidate. Preparing and testing its
-source does not install it, restart services, publish a release, or update the
-catalog. Prior 0.1.4/0.1.5 public releases and a catalog listing already exist;
-their pins do not identify this candidate.
+Connector 0.3.1 is a dependency-compatibility patch candidate for the combined
+0.3.0 package. Preparing and testing its source does not install it, restart
+services, publish a release, or update the catalog. Prior 0.1.4/0.1.5 public
+releases and the current 0.3.0 catalog pin do not identify this candidate.
 
 Before a later publication request: retain source/runtime-specific test evidence,
 run normal plugin validation/security review without overriding a blocked scan,
@@ -42,3 +42,12 @@ are compatibility risks and are disclosed for catalog review. The owner-only
 local socket additionally supports explicit idle/retirement checks; these are
 not phone or remote maintenance endpoints. No pairing records, credentials,
 selected-profile consent, or live services are changed by publishing source.
+
+## 0.3.1 dependency-compatibility scope
+
+This patch widens only the connector's Uvicorn range to include Hermes' exact
+`0.54.0` web-extra pin while retaining the previous `0.41.0` floor and an upper
+bound below `0.55.0`. Hermes core dependencies are not changed. Release metadata,
+tests and implementation-local compatibility notes are updated to 0.3.1. The
+plugin-repository push does not update the Hermes core catalog; the exact catalog
+SHA/version change remains a separate human-reviewed admission gate.

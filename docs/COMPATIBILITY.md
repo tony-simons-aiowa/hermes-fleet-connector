@@ -80,3 +80,12 @@ Local synthetic tests must establish each runtime checkpoint separately. Passing
 an import/capability test does not establish physical phone acceptance or public
 catalog acceptance. The collector's private read-only core imports are disclosed
 and can break on future Hermes releases; no core runtime objects are replaced.
+
+## Connector 0.3.1 uvicorn compatibility
+
+The 0.3.1 patch changes the plugin requirement from `uvicorn>=0.41.0,<0.42` to
+`uvicorn>=0.41.0,<0.55`. This retains the existing floor while admitting Hermes'
+current web-extra pin, `uvicorn==0.54.0`; it does not change or override Hermes'
+own dependency pin. A manifest regression test covers the version boundary, and
+a loopback HTTP smoke test exercises the connector app under the installed Uvicorn.
+Catalog admission remains a separate maintainer review.

@@ -24,7 +24,7 @@ def combined_config(home, enabled=True):
         ("[hermes-fleet-connector, fleet-liveops]" if enabled else "[hermes-fleet-connector]") + "\n")
     dashboard = home / "plugins/hermes-fleet-connector/dashboard"
     dashboard.mkdir(parents=True)
-    (dashboard / "manifest.json").write_text(json.dumps({"name": "fleet-liveops", "version": "0.3.0"}))
+    (dashboard / "manifest.json").write_text(json.dumps({"name": "fleet-liveops", "version": "0.3.1"}))
 
 
 def test_snapshot_requires_device_session_and_keeps_pairing_identity(fixture, monkeypatch):

@@ -25,9 +25,9 @@ def test_source_archive_is_deterministic_contains_one_plugin_and_no_private_or_p
     assert any(name.endswith("/fleet_connector/reporting.py") for name in files)
     assert not any("push_sender" in name or ".env" in name or "devices.sqlite3" in name for name in files)
     provenance = json.loads(next(data for name, data in files.items() if name.endswith("/release.json")))
-    assert provenance["source_sha"] == "0" * 40 and provenance["version"] == "0.3.0"
+    assert provenance["source_sha"] == "0" * 40 and provenance["version"] == "0.3.1"
     assert provenance["schema"] == 1
-    prefix = "hermes-fleet-connector-0.3.0/"
+    prefix = "hermes-fleet-connector-0.3.1/"
     for entry in provenance["files"]:
         assert hashlib.sha256(files[prefix + entry["path"]]).hexdigest() == entry["sha256"]
 
@@ -36,6 +36,6 @@ def test_mismatched_component_version_refuses_archive():
     paths = [p.relative_to(ROOT).as_posix() for p in ROOT.rglob("*") if p.is_file()]
     def read(path):
         raw = (ROOT / path).read_bytes()
-        return raw.replace(b"version: 0.3.0", b"version: 0.2.0") if path == "plugin.yaml" else raw
+        return raw.replace(b"version: 0.3.1", b"version: 0.2.0") if path == "plugin.yaml" else raw
     with pytest.raises(ValueError, match="versions differ"):
         builder.build("0" * 40, paths, read)

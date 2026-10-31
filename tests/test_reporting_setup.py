@@ -20,7 +20,7 @@ def installation(tmp_path):
         (home / "config.yaml").write_text("# profile\nplugins:\n  " + selection + "\nother: fixture\n")
     package = tmp_path / "plugins/hermes-fleet-connector/dashboard"
     package.mkdir(parents=True)
-    (package / "manifest.json").write_text(json.dumps({"name": S.CONSENT, "version": "0.3.0"}))
+    (package / "manifest.json").write_text(json.dumps({"name": S.CONSENT, "version": "0.3.1"}))
     old = tmp_path / "plugins/fleet-liveops"
     (old / "dashboard").mkdir(parents=True)
     (old / "plugin.yaml").write_text("name: fleet-liveops\nversion: 0.1.0\n")
